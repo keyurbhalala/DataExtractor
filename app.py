@@ -76,9 +76,7 @@ if "processed_signatures" not in st.session_state:
     st.session_state.processed_signatures = set()
 
 
-def _resolve_api_key(sidebar_key: str, secret_key: str) -> str:
-    if sidebar_key:
-        return sidebar_key
+def _resolve_api_key(secret_key: str) -> str:
     try:
         return st.secrets[secret_key]
     except Exception:  # noqa: BLE001 - secrets.toml may not exist locally
@@ -120,18 +118,12 @@ with st.sidebar:
     provider_name = st.radio("AI provider", list(PROVIDERS.keys()), index=0)
     provider = PROVIDERS[provider_name]
 
-    sidebar_key = st.text_input(
-        provider["key_label"],
-        type="password",
-        help=provider["key_help"],
-        key=f"sidebar_api_key__{provider_name}",
-    )
-    api_key = _resolve_api_key(sidebar_key, provider["secret_key"])
+    api_key = _resolve_api_key(provider["secret_key"])
 
     if api_key:
-        st.success("API key set" + (" (from secrets)" if not sidebar_key else ""))
+        st.success("API key set (from secrets)")
     else:
-        st.warning("No API key set yet.")
+        st.warning(f"No {provider['key_label']} found in Streamlit secrets.")
 
     model = st.selectbox("Model", provider["models"], index=0, key=f"model_select__{provider_name}")
     with st.expander("Use a different model ID"):
@@ -194,7 +186,7 @@ if clear_clicked:
 
 if process_clicked:
     if not api_key:
-        st.error(f"Add a {provider['key_label']} in the sidebar first.")
+        st.error(f"Add {provider['secret_key']} to this app's Streamlit secrets first.")
     else:
         new_files = [
             f for f in uploaded_files
