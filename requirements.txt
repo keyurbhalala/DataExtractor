@@ -5,6 +5,6 @@ pdfplumber>=0.11,<1
 PyMuPDF>=1.24,<2
 python-docx>=1.1,<2
 openpyxl>=3.1,<4
-Pillow>=10.4,<11
+Pillow>=10.4,<12
 pandas>=2.2,<3
 xlsxwriter>=3.2,<4
