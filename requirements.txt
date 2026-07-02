@@ -1,0 +1,10 @@
+streamlit>=1.38,<2
+anthropic>=0.34,<1
+google-genai>=1.0,<2
+pdfplumber>=0.11,<1
+PyMuPDF>=1.24,<2
+python-docx>=1.1,<2
+openpyxl>=3.1,<4
+Pillow>=10.4,<11
+pandas>=2.2,<3
+xlsxwriter>=3.2,<4
