@@ -25,6 +25,11 @@ extraction engine from the sidebar — same file-reading pipeline, same output
 schema, different model behind it. Handy for comparing accuracy/cost, or as
 a fallback if one provider is rate-limited or down.
 
+Every extraction batch is auto-saved to a Supabase (Postgres) table, and the
+**History** page lets you filter, search, export, and delete anything ever
+extracted — across sessions, browser refreshes, and redeploys. See
+[Persistent history (Supabase)](#persistent-history-supabase) below.
+
 ## How it works
 
 1. **`extractors.py`** reads whatever format you upload and produces raw
@@ -57,8 +62,19 @@ a fallback if one provider is rate-limited or down.
    Gemini's native structured-output mode (a real JSON Schema passed via
    `response_mime_type`/`response_json_schema`) instead of prompt-based JSON
    framing.
-5. **`app.py`** is the Streamlit UI: pick a provider, upload, process,
-   review/edit results in a table, export to CSV or Excel.
+5. **`db.py`** is the Supabase persistence layer: inserts newly-extracted
+   rows, updates them when you correct something in the editable table,
+   fetches/filters history, and deletes bad records. Every function raises
+   a clear, catchable error if Supabase isn't configured or a call fails,
+   so the rest of the app degrades gracefully (extraction/export still work
+   without a database at all — you just won't get a History tab).
+6. **`theme.py`** holds the maritime/logistics visual theme: injected CSS
+   (navy/teal/amber palette, Inter font, stat cards, hero header, the
+   History table's sticky header/zebra striping/monospace columns) and
+   inline SVG icons used in place of emoji for section headers.
+7. **`app.py`** is the Streamlit UI: pick a provider, upload, process,
+   review/edit results in a table, export to CSV or Excel, and switch to
+   the History tab to browse everything ever extracted.
 
 ## Local setup
 
@@ -107,6 +123,8 @@ streamlit run app.py
    ```toml
    ANTHROPIC_API_KEY = "sk-ant-api03-your-real-key"
    GEMINI_API_KEY = "your-real-gemini-key"
+   SUPABASE_URL = "https://your-project-ref.supabase.co"
+   SUPABASE_KEY = "your-supabase-key"
    ```
 
    These make `st.secrets["ANTHROPIC_API_KEY"]` / `st.secrets["GEMINI_API_KEY"]`
@@ -114,12 +132,126 @@ streamlit run app.py
    left blank — handy if you want to use the deployed app without
    re-entering a key every session, or want a key pre-set for other users on
    your team without exposing it to them in plaintext. You only need to set
-   the secret for the provider(s) you actually plan to use.
+   the secret for the provider(s) you actually plan to use. `SUPABASE_URL` /
+   `SUPABASE_KEY` enable the History tab — see the next section for how to
+   get them. The app still works for one-off extraction/export without
+   them; you just won't get persistent history.
 5. Click **Deploy**. Streamlit Community Cloud installs everything from
    `requirements.txt` automatically.
 
-No other configuration is required — there's no database or backend beyond
-the AI provider API call itself.
+**Important:** Streamlit Community Cloud's filesystem is ephemeral — a local
+SQLite file or any other on-disk write does **not** survive an app restart
+or redeploy. That's why history is stored in Supabase (a hosted Postgres
+database) rather than locally; see below.
+
+## Persistent history (Supabase)
+
+Results are stored in a single Postgres table, `extracted_documents`, in a
+Supabase project you control. Supabase's free tier is plenty for this.
+
+### 1. Create the Supabase project
+
+1. Go to [supabase.com](https://supabase.com), sign in, and create a new
+   project (pick any name/region; note the database password somewhere
+   safe, though this app doesn't need it directly).
+2. Once the project is provisioned, open **Project Settings -> API**. You'll
+   need two values for Streamlit secrets:
+   - **Project URL** -> `SUPABASE_URL`
+   - An API key -> `SUPABASE_KEY`. Either the `anon` `public` key (paired
+     with the row-level-security policy below, which is included in the
+     SQL and required for anon requests to work) or the `service_role`
+     key (bypasses row-level security entirely). Since this app runs
+     server-side in Streamlit and secrets are never sent to the browser,
+     using `service_role` is simpler and fine for a single-team internal
+     tool; use `anon` + the policy below if you'd rather keep the key
+     lower-privilege.
+
+### 2. Create the table
+
+I chose **"create it yourself via the SQL Editor"** over shipping a Python
+migration script: this is one table, created once, with no schema that's
+expected to evolve on a regular cadence — a migration runner (Alembic-style
+versioned migrations, etc.) would be more machinery than the problem
+warrants. If the schema needs to change later, treat the ALTER statement as
+a one-off, run the same way.
+
+In your Supabase project, open **SQL Editor -> New query**, paste the
+following, and run it once:
+
+```sql
+create extension if not exists pgcrypto;
+
+create table if not exists extracted_documents (
+    id             uuid primary key default gen_random_uuid(),
+    batch_id       uuid not null,
+    source_file    text not null,
+    container_number text,
+    seal_number    text,
+    bales          integer,
+    net_weight     numeric,
+    gross_weight   numeric,
+    tare_weight    numeric,
+    unit           text,
+    notes          text,
+    extracted_at   timestamptz not null default now(),
+    edited         boolean not null default false
+);
+
+create index if not exists idx_extracted_documents_extracted_at
+    on extracted_documents (extracted_at desc);
+create index if not exists idx_extracted_documents_batch_id
+    on extracted_documents (batch_id);
+create index if not exists idx_extracted_documents_container_number
+    on extracted_documents (container_number);
+create index if not exists idx_extracted_documents_source_file
+    on extracted_documents (source_file);
+
+-- Only needed if you're using the `anon` key rather than `service_role`.
+-- Enables row-level security, then adds one permissive policy so the app
+-- (which is the only client talking to this table) can read/write freely.
+alter table extracted_documents enable row level security;
+
+create policy "app full access"
+    on extracted_documents
+    for all
+    using (true)
+    with check (true);
+```
+
+### 3. Add the secrets
+
+Locally: copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`
+and fill in `SUPABASE_URL` / `SUPABASE_KEY` (never commit the real file —
+it's already gitignored). On Streamlit Community Cloud: add the same two
+keys under **Settings -> Secrets** (see the deploy section above).
+
+### 4. Save behavior
+
+I went with **auto-save + an explicit re-save button**, not one or the
+other:
+
+- **Auto-save on extraction.** The moment a batch finishes processing, its
+  rows are written to Supabase with `edited = false`. This is the
+  "guarantee nothing is lost" path — it doesn't depend on the user
+  remembering to click anything before closing the tab.
+- **Explicit "Save edits to history" button** for corrections made
+  afterward in the editable table. Writing to Supabase on every keystroke
+  in `st.data_editor` would mean a network round-trip per cell edit, which
+  is both slow and noisy (and would mark rows "edited" the instant you
+  touched them, even before you'd finished typing). A button gives you a
+  clear, deliberate point to commit corrections, and the app tracks which
+  rows are saved vs. not (see the caption under the Results table) so it's
+  obvious when you still need to click it.
+
+Rows you edit get `edited = true` in the History table so you can always
+tell AI output from a human correction.
+
+### Verifying it survives a redeploy
+
+Extract something, confirm it shows up on the History tab, then redeploy
+(or just restart) the app on Streamlit Community Cloud and check History
+again — the record should still be there, since it lives in Supabase, not
+on the app's local filesystem.
 
 ## Using the app
 
@@ -138,13 +270,21 @@ the AI provider API call itself.
 2. Upload one or more files.
 3. Click **Extract data**. A progress indicator shows per-file status;
    errors on one file (bad key, unreadable file, no data found) are reported
-   inline and don't stop the rest of the batch.
+   inline and don't stop the rest of the batch. Rows are auto-saved to
+   history at this point (if Supabase is configured).
 4. Review the **Results** table — it's fully editable
-   (`st.data_editor`), so fix any misread field before exporting.
-5. Check the metrics row (containers found / total bales / files processed)
+   (`st.data_editor`), so fix any misread field before exporting. Click
+   **Save edits to history** to push your corrections back to Supabase
+   (flagged `edited`).
+5. Check the stat cards (containers found / total bales / files processed)
    as a sanity check against the source paperwork.
 6. Download **CSV** or **Excel**.
-7. **Clear all results** resets everything for a new batch.
+7. **Clear all results** resets the Extract page for a new batch (it does
+   not delete anything from history).
+8. Switch to the **History** tab (sidebar nav) to browse everything ever
+   extracted: filter by date range, container number, or source file;
+   search across all fields; export the filtered view as CSV/XLSX; or
+   delete a bad record.
 
 ## Notes on accuracy
 
@@ -167,13 +307,16 @@ the AI provider API call itself.
 
 ```
 .
-├── app.py                        # Streamlit UI, provider selection
+├── app.py                        # Streamlit UI: Extract + History pages, provider selection
 ├── extractors.py                 # File-reading logic (PDF/DOCX/XLSX/CSV/images)
 ├── extraction_common.py          # Shared schema, prompt text, and helpers
 ├── ai_extract.py                 # Claude (Anthropic) extraction backend
 ├── gemini_extract.py             # Gemini (Google) extraction backend
+├── db.py                         # Supabase persistence layer (insert/update/fetch/delete)
+├── theme.py                      # CSS injection, SVG icons, hero/stat-card/table components
 ├── requirements.txt
 ├── .streamlit/
+│   ├── config.toml               # Base theme (dark, navy/teal) — committed, no secrets in it
 │   └── secrets.toml.example      # Template — copy to secrets.toml, don't commit the real one
 ├── .gitignore
 └── README.md
