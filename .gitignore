@@ -16,5 +16,5 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Streamlit
-.streamlit/config.toml
+# Note: .streamlit/config.toml IS committed (it holds the app's theme, not
+# secrets) — do not add it back here.
