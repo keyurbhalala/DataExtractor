@@ -132,15 +132,22 @@ def section_heading(icon_name: str, text: str, subtitle: str = "") -> str:
 
 
 def stat_card(icon_name: str, label: str, value: str, accent: str = TEAL) -> str:
-    return f"""
-    <div class="cde-stat-card" style="--accent:{accent}">
-        <div class="cde-stat-icon">{icon(icon_name, 22, accent)}</div>
-        <div class="cde-stat-body">
-            <div class="cde-stat-value">{_html.escape(str(value))}</div>
-            <div class="cde-stat-label">{_html.escape(label)}</div>
-        </div>
-    </div>
-    """
+    # NOTE: must be a single line with no blank lines inside it. Streamlit's
+    # markdown renderer (CommonMark) treats a run of `<div>`-based HTML as a
+    # "type 6" HTML block, which terminates at the first blank line — unlike
+    # `<style>`/`<script>`/`<pre>` blocks, which only end at their matching
+    # closing tag. Since stat_cards_row() concatenates several of these,
+    # any embedded blank line (or even just a whitespace-only line) between
+    # fragments causes everything after it to fall back to being rendered
+    # as literal text instead of HTML.
+    return (
+        f'<div class="cde-stat-card" style="--accent:{accent}">'
+        f'<div class="cde-stat-icon">{icon(icon_name, 22, accent)}</div>'
+        f'<div class="cde-stat-body">'
+        f'<div class="cde-stat-value">{_html.escape(str(value))}</div>'
+        f'<div class="cde-stat-label">{_html.escape(label)}</div>'
+        f'</div></div>'
+    )
 
 
 def stat_cards_row(cards: list[tuple[str, str, str, str]]) -> str:
@@ -150,15 +157,16 @@ def stat_cards_row(cards: list[tuple[str, str, str, str]]) -> str:
 
 
 def hero(title: str, subtitle: str) -> str:
-    return f"""
-    <div class="cde-hero">
-        <div class="cde-hero-bg">{_HERO_SVG}</div>
-        <div class="cde-hero-content">
-            <div class="cde-hero-title">{icon("ship", 30, TEAL, 2)}<span>{_html.escape(title)}</span></div>
-            <div class="cde-hero-subtitle">{_html.escape(subtitle)}</div>
-        </div>
-    </div>
-    """
+    # Single line for the same reason as stat_card() above.
+    hero_svg = _HERO_SVG.replace("\n", "")
+    return (
+        f'<div class="cde-hero">'
+        f'<div class="cde-hero-bg">{hero_svg}</div>'
+        f'<div class="cde-hero-content">'
+        f'<div class="cde-hero-title">{icon("ship", 30, TEAL, 2)}<span>{_html.escape(title)}</span></div>'
+        f'<div class="cde-hero-subtitle">{_html.escape(subtitle)}</div>'
+        f'</div></div>'
+    )
 
 
 _HERO_SVG = """
