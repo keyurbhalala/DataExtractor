@@ -275,7 +275,6 @@ with st.sidebar:
         "Supported formats: " + ", ".join(sorted(f".{e}" for e in SUPPORTED_EXTENSIONS))
     )
     st.caption(
-        "Files are sent to the selected AI provider's API for extraction. "
         "Extracted rows are saved to your Supabase history store if configured."
     )
 
